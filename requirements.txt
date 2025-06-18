@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+requests
+pydantic
+httpx
+python-dotenv
+ollama  # if you're calling the local Ollama API
+rapidfuzz
+python-dateutil
+pytest
