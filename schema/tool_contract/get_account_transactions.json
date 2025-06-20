@@ -14,14 +14,12 @@
     {
       "input_param":    "startDate",
       "response_field": "bookingDate",
-      "filter_type":    "date_from",
-      "date_format":    "%Y-%m-%d"
+      "filter_type":    "date_from"
     },
     {
       "input_param":    "endDate",
       "response_field": "bookingDate",
-      "filter_type":    "date_to",
-      "date_format":    "%Y-%m-%d"
+      "filter_type":    "date_to"
     },
     {
       "input_param":    "transactionName",

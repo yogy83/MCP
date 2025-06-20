@@ -1,12 +1,16 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
+# Configurable base URL and API key
 TEMENOS_BASE_URL = os.getenv("TEMENOS_BASE_URL", "https://api.temenos.com")
 TEMENOS_API_KEY = os.getenv("TEMENOS_API_KEY")
 
+# Tool contract path (defaulting to schema/tool_contract)
+TOOL_CONTRACT_DIR = Path(os.getenv("TOOL_CONTRACT_DIR", "schema/tool_contract"))
 
 def build_auth_headers():
     """

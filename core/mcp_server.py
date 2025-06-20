@@ -1,67 +1,122 @@
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from core.mcp import process_user_request
-from pathlib import Path
-from datetime import datetime
+# core/mcp_server.py
+
 import uuid
 import time
 import json
 import logging
-import os
+from pathlib import Path
+from typing import Optional
 
+
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+from core.mcp import process_user_request
+import logging
+
+# Enable DEBUG for our planner module only
+logging.getLogger("core.planner").setLevel(logging.DEBUG)
+
+
+# —— App & CORS setup —————————————————————————————————————————————
 app = FastAPI()
 
-# Enable CORS for local testing (optional)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict this
+    allow_origins=["*"],      # tighten in prod
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Setup basic logging
 logging.basicConfig(level=logging.INFO)
 
+
+# —— Logging path ———————————————————————————————————————————————————
 BASE_DIR = Path(__file__).resolve().parent
 LOG_PATH = BASE_DIR / "logs"
-LOG_PATH.mkdir(exist_ok=True)
 
-@app.post("/process")
-async def handle_process(request: Request):
-    request_id = str(uuid.uuid4())
-    start_time = time.time()
 
+# —— Request & Error models ———————————————————————————————————————
+class ProcessRequest(BaseModel):
+    session_id: Optional[str] = Field(
+        None, description="Client-provided session identifier"
+    )
+    goal: str = Field(..., description="User’s high-level goal")
+    objective: str = Field(..., description="Tool + filter specification")
+    expected_outcome: str = Field(..., description="What the user expects back")
+
+
+class ErrorDetail(BaseModel):
+    error: str
+    request_id: str
+
+
+# —— Background log writer ————————————————————————————————————————
+def _write_log(entry: dict):
     try:
-        payload = await request.json()
-        session_id = payload.get("session_id") or str(uuid.uuid4())
-        if "session_id" not in payload:
-            logging.info(f"🆕 New session created: {session_id}")
+        LOG_PATH.mkdir(parents=True, exist_ok=True)
+        path = LOG_PATH / "mcp_requests.jsonl"
+        with open(path, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        logging.exception("Failed to write request log")
 
-        response = process_user_request(payload, session_id)
-        response["session_id"] = session_id
 
-        log_entry = {
-            "id": request_id,
-            "timestamp": datetime.now().isoformat(),
-            "duration": round(time.time() - start_time, 3),
-            "input": payload,
-            "output": response,
-            "session_id": session_id
-        }
+# —— /process endpoint —————————————————————————————————————————————
+@app.post("/process")
+async def handle_process(
+    payload: ProcessRequest,
+    bg: BackgroundTasks,
+):
+    # 1) IDs & timing
+    request_id = str(uuid.uuid4())
+    session_id = payload.session_id or str(uuid.uuid4())
+    if payload.session_id is None:
+        logging.info(f"🆕 New session created: {session_id}")
+    start_ts = time.time()
 
-        with open(LOG_PATH / "mcp_requests.jsonl", "a") as f:
-            f.write(json.dumps(log_entry) + "\n")
+    # 2) Prepare dict for planner
+    req_dict = payload.model_dump(exclude_none=True)
 
-        return response
+    # 3) Execute
+    log_enabled = True
+    result = None
+    try:
+        result = process_user_request(req_dict, session_id)
+        result["session_id"] = session_id
 
-    except Exception as e:
-        logging.error(f"❌ Error processing request {request_id}: {e}", exc_info=True)
+    except ValueError as ve:
+        # Domain validation error → 400, but still logged
+        logging.warning(f"Validation error: {ve}")
+        result = {}
+        raise HTTPException(status_code=400, detail=str(ve))
+
+    except Exception as exc:
+        # Unexpected crash → 500, no log
+        logging.exception(f"❌ Error processing request {request_id}")
+        log_enabled = False
         raise HTTPException(
             status_code=500,
-            detail={
-                "message": "Internal processing error",
-                "error": str(e),
-                "request_id": request_id
-            }
+            detail=ErrorDetail(
+                error=str(exc),
+                request_id=request_id
+            ).model_dump()
         )
+
+    finally:
+        if log_enabled:
+            duration = round(time.time() - start_ts, 3)
+            log_entry = {
+                "id": request_id,
+                "session_id": session_id,
+                "timestamp": time.time(),
+                "duration": duration,
+                "input": req_dict,
+                "output": result,
+            }
+            bg.add_task(_write_log, log_entry)
+
+    # 4) Return result
+    return result

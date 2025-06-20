@@ -1,148 +1,146 @@
+# tools/run_tool.py
+
 import requests
-from datetime import datetime
-from dateutil.parser import parse as parse_date
-from rapidfuzz import fuzz
 import logging
+from datetime import datetime
+from dateutil.parser import parse as _flexible_parse
+from rapidfuzz import fuzz
+from config.config import TEMENOS_BASE_URL, build_auth_headers
 
-try:
-    from config.config import BASE_URL
-except ImportError:
-    BASE_URL = ""
-
-
-# Configure logging
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+print("🔎 Loaded tools/run_tool.py from:", __file__)
+logger.warning("🚨 MCP DEBUG: ACTIVE run_tool.py path = %s", __file__)
 
 
 def call_api(endpoint: str, path_params: dict, query_params: dict) -> dict:
-    """
-    Invoke the external API and return the parsed JSON response.
-    """
-    url = BASE_URL + endpoint.format(**path_params)
-    logger.debug(f"Calling API: {url} with params {query_params}")
-    response = requests.get(url, params=query_params)
-    response.raise_for_status()
-    return response.json()
+    url = TEMENOS_BASE_URL + endpoint.format(**path_params)
+    logger.debug(f"🌍 [DEBUG] Calling URL: {url} with params {query_params}")
+    headers = build_auth_headers()
+    resp = requests.get(url, params=query_params, headers=headers)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _parse_date(raw: str, fmt: str = None):
+    logger.warning("[DIAGNOSTIC] _parse_date: using fallback-aware version ✅")
+    try:
+        raw_str = str(raw).strip()
+        logger.debug(f"[DATE PARSE] Attempting: {raw_str!r} (type={type(raw).__name__}) with format={fmt!r}")
+
+        if fmt:
+            try:
+                parsed = datetime.strptime(raw_str, fmt).date()
+                logger.debug(f"[DATE PARSE] strptime success → {parsed}")
+                return parsed
+            except Exception as e1:
+                logger.warning(f"[WARN] strptime failed: {e1} — falling back to flexible parse")
+
+        parsed = _flexible_parse(raw_str).date()
+        logger.debug(f"[DATE PARSE] dateutil success → {parsed}")
+        return parsed
+    except Exception as final_err:
+        logger.error(f"[ERROR] Final date parsing failure: {final_err}")
+        raise
 
 
 def apply_local_filters(response_data: dict, tool_contract: dict, local_filters: dict) -> dict:
-    """
-    Apply data-driven filters defined in the JSON tool contract to the API response.
-    """
+    logger.warning("🔥 DIAGNOSTIC: apply_local_filters() executing at runtime ✅")
+    logger.warning("🧪 response_data.body type = %s", type(response_data.get("body")))
+    logger.warning("🧪 body preview = %r", response_data.get("body"))
+
+    data_list = response_data.get("body", []) or []
+    if not isinstance(data_list, list):
+        raise TypeError("Expected 'body' in response_data to be a list.")
+
     rules = tool_contract.get("filtering_rules", [])
-    filtered = response_data.get("body", [])
-    logger.info(f"Starting filtering: {len(filtered)} records")
 
     for rule in rules:
-        param = rule.get("input_param")
+        param = rule["input_param"]
         if param not in local_filters:
             continue
 
-        field = rule.get("response_field")
-        ftype = rule.get("filter_type")
-        value = local_filters[param]
-        threshold = rule.get("threshold")
-        tolerance = rule.get("tolerance")
+        field = rule["response_field"]
+        ftype = rule["filter_type"]
+        raw_value = local_filters[param]
+        threshold = rule.get("threshold", 70)
         method = rule.get("method", "partial")
-        date_format = rule.get("date_format")
+        tolerance = rule.get("tolerance", 0.2)
+        date_fmt = rule.get("date_format")
 
-        temp = []
-
-        if ftype in ("date_from", "date_to"):
-            try:
-                cmp_date = datetime.strptime(value, date_format).date() if date_format else parse_date(value).date()
-            except Exception as e:
-                logger.warning(f"Unable to parse filter date '{value}': {e}")
-                continue
-
-            def keep_date(item):
-                raw = item.get(field, "")
-                try:
-                    d = datetime.strptime(raw, date_format).date() if date_format else parse_date(raw).date()
-                except Exception:
-                    return False
-                return (d >= cmp_date) if ftype == "date_from" else (d <= cmp_date)
-
-            temp = [itm for itm in filtered if keep_date(itm)]
-
-        elif ftype == "exact":
-            case_sensitive = rule.get("case_sensitive", False)
-            for itm in filtered:
-                target = itm.get(field)
-                if target is None:
-                    continue
-                if case_sensitive:
-                    match = str(target) == str(value)
-                else:
-                    match = str(target).lower() == str(value).lower()
-                if match:
-                    temp.append(itm)
+        if ftype == "exact":
+            data_list = [
+                item for item in data_list
+                if str(item.get(field, "") or "").lower() == str(raw_value).lower()
+            ]
 
         elif ftype == "substring":
-            q = str(value or "").lower()
-            for itm in filtered:
-                txt = str(itm.get(field, "") or "").lower()
-                if q in txt:
-                    temp.append(itm)
+            data_list = [
+                item for item in data_list
+                if str(raw_value).lower() in str(item.get(field, "") or "").lower()
+            ]
 
         elif ftype == "fuzzy_substring":
-            thr = threshold if threshold is not None else 70
-            q = str(value or "").lower()
-            for itm in filtered:
-                txt = str(itm.get(field, "") or "").lower()
-                if method == "ratio":
-                    score = fuzz.ratio(q, txt)
-                elif method == "token_sort":
-                    score = fuzz.token_sort_ratio(q, txt)
-                else:
-                    score = fuzz.partial_ratio(q, txt)
-                logger.debug(f"[FUZZY] {field}: '{q}' vs '{txt}' -> {score}")
-                if score >= thr:
-                    temp.append(itm)
+            q = str(raw_value or "").lower()
+            filtered = []
+            for item in data_list:
+                text = str(item.get(field, "") or "").lower()
+                score = (
+                    fuzz.ratio(q, text) if method == "ratio"
+                    else fuzz.token_sort_ratio(q, text) if method == "token_sort"
+                    else fuzz.partial_ratio(q, text)
+                )
+                if score >= threshold:
+                    filtered.append(item)
+            data_list = filtered
 
         elif ftype == "numerical_fuzzy":
-            tol = tolerance if tolerance is not None else 0.2
             try:
-                target = float(value)
+                target = float(raw_value)
             except Exception:
                 continue
-            for itm in filtered:
+
+            data_list = [
+                item for item in data_list
+                if isinstance(item.get(field), (int, float, str)) and
+                abs(float(item[field]) - target) / max(abs(target), 1) <= tolerance
+            ]
+
+        elif ftype in ("date_from", "date_to"):
+            try:
+                cmp_date = _parse_date(raw_value, date_fmt)
+            except Exception:
+                continue
+
+            filtered = []
+            for item in data_list:
+                raw_item = item.get(field, "")
                 try:
-                    val = float(itm.get(field, 0))
+                    d = _parse_date(raw_item, date_fmt)
+                    if (ftype == "date_from" and d >= cmp_date) or \
+                       (ftype == "date_to" and d <= cmp_date):
+                        filtered.append(item)
                 except Exception:
                     continue
-                rel = abs(val - target) / max(abs(target), 1)
-                if rel <= tol:
-                    temp.append(itm)
+            data_list = filtered
 
         else:
-            logger.warning(f"Unknown filter type: {ftype}")
-            temp = filtered
+            logger.warning(f"[WARN] Unknown filter type: {ftype}")
 
-        filtered = temp
-        logger.info(f"After '{ftype}', {len(filtered)} records remain")
-
-    return {"body": filtered}
+    return {"body": data_list}
 
 
 def run_tool(tool_contract: dict, inputs: dict) -> dict:
-    """
-    Main entry: calls the API based on required_inputs, applies optional local filters, and returns filtered data.
-    """
-    api_params = {}
-    local_filters = {}
+    try:
+        path_params = {k: inputs[k] for k in tool_contract["required_inputs"]}
+    except KeyError as e:
+        raise ValueError(f"Required input missing: {e}")
 
-    for inp in tool_contract.get("optional_inputs", []):
-        name = inp.get("name")
-        if name in inputs:
-            if inp.get("send_to_api", False):
-                api_params[name] = inputs[name]
-            else:
-                local_filters[name] = inputs[name]
+    opt_sendable = {
+        p["name"]
+        for p in tool_contract.get("optional_inputs", [])
+        if p.get("send_to_api", False)
+    }
+    query_params = {k: v for k, v in inputs.items() if k in opt_sendable}
 
-    for name in tool_contract.get("required_inputs", []):
-        api_params[name] = inputs[name]
-
-    raw = call_api(tool_contract.get("endpoint"), api_params, api_params)
-    return apply_local_filters(raw, tool_contract, local_filters)
+    raw = call_api(tool_contract["endpoint"], path_params, query_params)
+    return apply_local_filters(raw, tool_contract, inputs)

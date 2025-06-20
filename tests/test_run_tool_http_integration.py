@@ -1,17 +1,20 @@
-import json
+import importlib
 import pytest
 import responses
 
-# 1) Import the full entry-point
+import config.config as cfg
+import tools.run_tool as rt
 from tools.run_tool import run_tool
 
-# 2) Patch BASE_URL so run_tool targets our fake server
-import config.config as cfg
+
 @pytest.fixture(autouse=True)
 def configure_base_url(monkeypatch):
-    monkeypatch.setattr(cfg, "BASE_URL", "http://localhost:8000/api")
+    # Point tests at the fake server
+    monkeypatch.setenv("TEMENOS_BASE_URL", "http://localhost:8000/api")
+    importlib.reload(cfg)
+    monkeypatch.setattr(rt, "BASE_URL", cfg.TEMENOS_BASE_URL, raising=False)
 
-# 3) A sample contract for the transactions tool
+
 @pytest.fixture
 def tx_contract():
     return {
@@ -31,42 +34,29 @@ def tx_contract():
         ]
     }
 
+
 @responses.activate
 def test_http_integration_exact_filter(tx_contract):
-    """
-    True integration: run_tool -> call_api (requests.get) -> apply_local_filters
-    """
-    # 1) Stub the HTTP endpoint. Note BASE_URL + endpoint:
-    url = "http://localhost:8000/api" + tx_contract["endpoint"].format(accountId="100")
-    sample_body = {
-        "body": [
-            {"transactionName": "Rent"},
-            {"transactionName": "Food"},
-            {"transactionName": "rent"}
-        ]
-    }
-    responses.add(responses.GET, url, json=sample_body, status=200)
+    url = cfg.TEMENOS_BASE_URL + tx_contract["endpoint"].format(accountId="100")
+    sample = {"body":[
+        {"transactionName":"Rent"},
+        {"transactionName":"Food"},
+        {"transactionName":"rent"}
+    ]}
+    responses.add(responses.GET, url, json=sample, status=200)
 
-    # 2) Invoke with a local filter
-    result = run_tool(tx_contract, {"accountId": "100", "transactionName": "rent"})
+    out = run_tool(tx_contract, {"accountId":"100","transactionName":"rent"})
+    assert out == {"body":[
+        {"transactionName":"Rent"},
+        {"transactionName":"rent"}
+    ]}
 
-    # 3) Only records matching “rent” (case-insensitive) remain
-    assert result == {
-        "body": [
-            {"transactionName": "Rent"},
-            {"transactionName": "rent"}
-        ]
-    }
 
 @responses.activate
 def test_http_integration_no_filter(tx_contract):
-    """
-    When no local_filters are provided, output == raw API response.
-    """
-    url = "http://localhost:8000/api" + tx_contract["endpoint"].format(accountId="200")
-    sample_body = {"body":[{"transactionName":"X"},{"transactionName":"Y"}]}
-    responses.add(responses.GET, url, json=sample_body, status=200)
+    url = cfg.TEMENOS_BASE_URL + tx_contract["endpoint"].format(accountId="200")
+    sample = {"body":[{"transactionName":"X"},{"transactionName":"Y"}]}
+    responses.add(responses.GET, url, json=sample, status=200)
 
-    # No 'transactionName' filter in inputs → no filtering
-    result = run_tool(tx_contract, {"accountId": "200"})
-    assert result == sample_body
+    out = run_tool(tx_contract, {"accountId":"200"})
+    assert out == sample

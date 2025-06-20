@@ -2,38 +2,42 @@ from typing import Dict, Any, List
 from core.executioner import execute_plan
 from core.aggregator import aggregate
 from core import planner
+import json
 import copy
 
 SESSION_STORE: Dict[str, Dict[str, Any]] = {}
 
 def extract_values_from_result(result: Dict[str, Any], key: str) -> List[Any]:
-    """
-    Extract values from tool result that can be used for next step inputs.
-    For example, extract all 'account' or 'accountId' values.
-    """
     extracted = []
-    # result may contain 'result' key or direct list of dicts
     data_list = []
-    if isinstance(result, dict):
-        if "result" in result:
-            data_list = result["result"]
-        elif isinstance(result, list):
-            data_list = result
+
+    if isinstance(result, dict) and "result" in result:
+        value = result["result"]
+        if isinstance(value, list):
+            data_list = value
+        elif isinstance(value, dict):
+            data_list = [value]  # ✅ wrap single dict
+        else:
+            print(f"⚠️ Unexpected format inside 'result': {type(value)}")
     elif isinstance(result, list):
         data_list = result
+    elif isinstance(result, dict):  # fallback if 'result' missing but structure exists
+        data_list = [result]
+    else:
+        print(f"⚠️ Unexpected top-level result format: {type(result)}")
 
     for item in data_list:
-        # try common keys
-        for candidate_key in ["account", "accountId", "arrangementId"]:
-            if candidate_key in item:
-                extracted.append(item[candidate_key])
-                break
+        if isinstance(item, dict):
+            for candidate_key in ["account", "accountId", "arrangementId"]:
+                if candidate_key in item:
+                    extracted.append(item[candidate_key])
+                    break
+        else:
+            print(f"⚠️ Skipping non-dict item in result list: {item}")
+
     return extracted
 
 def replace_placeholders(inputs: Dict[str, Any], replacements: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Replace placeholders like "<will be populated>" with actual values from replacements.
-    """
     new_inputs = copy.deepcopy(inputs)
     for k, v in new_inputs.items():
         if isinstance(v, str) and v.strip().startswith("<") and v.strip().endswith(">"):
@@ -55,7 +59,6 @@ def process_user_request(input_contract: Dict[str, Any], session_id: str) -> Dic
     memory = session_context.get("memory", {})
 
     if last_response.get("is_final") is False and last_response.get("missing"):
-        # Handle user follow-up providing missing input
         missing_param = last_response["missing"][0]
         memory[missing_param] = input_contract.get("goal", "").strip()
 
@@ -63,7 +66,6 @@ def process_user_request(input_contract: Dict[str, Any], session_id: str) -> Dic
         objective = session_context.get("original_objective") or input_contract.get("objective", "")
         expected_outcome = session_context.get("original_expected_outcome") or input_contract.get("expected_outcome", "")
     else:
-        # First interaction in the session
         goal = input_contract.get("goal", "")
         objective = input_contract.get("objective", "")
         expected_outcome = input_contract.get("expected_outcome", "")
@@ -78,7 +80,6 @@ def process_user_request(input_contract: Dict[str, Any], session_id: str) -> Dic
     try:
         plan_steps, missing = planner.plan(goal, objective, expected_outcome, memory)
 
-        # Inject known memory values initially
         for step in plan_steps:
             for key, val in memory.items():
                 step.setdefault("inputs", {}).setdefault(key, val)
@@ -98,26 +99,46 @@ def process_user_request(input_contract: Dict[str, Any], session_id: str) -> Dic
             SESSION_STORE[session_id] = session_context
             return response
 
-        # Now execute plan step by step, chaining outputs to next step inputs
         all_results = {}
         for i, step in enumerate(plan_steps):
-            # Before executing, replace placeholders in inputs with previous outputs
+            step_key = f"step{i+1}"
+
             if i > 0:
                 prev_step_result = all_results.get(f"step{i}", {})
-                # Extract possible keys to replace placeholders
+
+                if isinstance(prev_step_result, str):
+                    try:
+                        prev_step_result = json.loads(prev_step_result)
+                    except json.JSONDecodeError:
+                        print(f"❌ Failed to parse string JSON from {step_key}")
+                        prev_step_result = {}
+
                 replacements = {}
                 extracted_accounts = extract_values_from_result(prev_step_result, "accountId")
                 if extracted_accounts:
-                    # If multiple, you may want to loop or pick the first for now
                     replacements["willbepopulated"] = extracted_accounts[0]
-
+                print(f"🔄 Placeholder replacements for {step_key}: {replacements}")
                 step["inputs"] = replace_placeholders(step.get("inputs", {}), replacements)
 
-            # Execute the step
+            print(f"⚙️ Running {step_key}: {step['tool']} with inputs {step['inputs']}")
             result = execute_plan([step])
-            all_results[f"step{i+1}"] = result.get("step1", {})
 
-        # Enrich each step with its result
+            if isinstance(result, str):
+                try:
+                    result = json.loads(result)
+                except json.JSONDecodeError:
+                    print(f"❌ Failed to parse result from execute_plan at {step_key}")
+                    result = {}
+
+            print(f"📦 Raw result of {step_key}: {result}")
+            print(f"📦 Type of result: {type(result)}")
+
+            if isinstance(result, dict):
+                all_results[step_key] = result.get(step_key, result)
+            else:
+                print(f"❗ Unexpected result format at {step_key}. Defaulting to empty.")
+                all_results[step_key] = {}
+
         enriched_steps = [
             {**step, "result": all_results.get(f"step{i+1}", {})}
             for i, step in enumerate(plan_steps)

@@ -1,0 +1,72 @@
+Scenario 1 (already tested)
+Filter: transactionName substring + startDate + endDate
+
+{
+  "goal": "Find all internal transfers for account 106194 in May 2024",
+  "objective": "Retrieve transactions for account 106194 where the transaction name includes 'Internal Transfer' during May 2024",
+  "expected_outcome": "List transactions matching 'Internal Transfer' from May 1st to May 31st for account 106194"
+}
+Scenario 2
+Filter: transactionName substring only (e.g. "Debit Card Charges")
+
+{
+  "goal": "Get all debit card charges for account 106194",
+  "objective": "Filter transactions where the transaction name includes 'Debit Card Charges' for account 106194",
+  "expected_outcome": "List all transactions with 'Debit Card Charges' regardless of date"
+}
+Scenario 3
+Filter: Date range only (startDate + endDate), no transaction name filter
+
+{
+  "goal": "Retrieve all transactions for account 106194 between April 20 and April 30, 2024",
+  "objective": "Fetch transactions for account 106194 where bookingDate is between April 20, 2024 and April 30, 2024",
+  "expected_outcome": "All transactions within the specified date range, regardless of name"
+}
+Scenario 4
+Filter: transactionName substring + endDate only (e.g. "Commission Paid")
+
+{
+  "goal": "Find all 'Commission Paid' transactions until April 22, 2024 for account 106194",
+  "objective": "Filter for transactions with 'Commission Paid' in the name with bookingDate on or before April 22, 2024",
+  "expected_outcome": "List of 'Commission Paid' transactions before or on April 22, 2024"
+}
+Scenario 5
+Filter: Exact match on transactionName (e.g. "Charge - Make Due")
+
+{
+  "goal": "Get transactions for account 106194 where transaction name exactly matches 'Charge - Make Due'",
+  "objective": "Filter transactions with exact transactionName 'Charge - Make Due' for account 106194",
+  "expected_outcome": "All transactions with exact match 'Charge - Make Due'"
+}
+Scenario 6
+Filter: Numerical fuzzy filter on transactionAmount (assuming support)
+
+{
+  "goal": "Find transactions with amount approximately 100 for account 106194",
+  "objective": "Filter transactions with transactionAmount close to 100 (within tolerance) for account 106194",
+  "expected_outcome": "List transactions with amounts near 100"
+}
+Scenario 7
+Filter: startDate only (e.g. from April 25, 2024 onwards)
+
+{
+  "goal": "Get transactions for account 106194 starting April 25, 2024",
+  "objective": "Filter transactions with bookingDate on or after April 25, 2024",
+  "expected_outcome": "All transactions from April 25, 2024 onward"
+}
+Scenario 8
+Filter: transactionName substring + startDate only (e.g. "NEW ITEM DEBIT" from April 30, 2024)
+
+{
+  "goal": "Retrieve 'NEW ITEM DEBIT' transactions from April 30, 2024 onwards for account 106194",
+  "objective": "Filter transactions with 'NEW ITEM DEBIT' in the name with bookingDate on or after April 30, 2024",
+  "expected_outcome": "All matching 'NEW ITEM DEBIT' transactions from April 30, 2024 forward"
+}
+Scenario 9
+Filter: No filters (raw fetch)
+
+{
+  "goal": "Retrieve complete transaction history for account 106194",
+  "objective": "Fetch all transactions without any filtering",
+  "expected_outcome": "Full unfiltered transaction list for account 106194"
+}
