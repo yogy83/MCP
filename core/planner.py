@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from pathlib import Path
 from uuid import uuid4
 from core.utils import load_tool_contracts_from_folder
@@ -11,6 +12,37 @@ logger = logging.getLogger(__name__)
 
 TOOL_CONTRACT_DIR = Path("schema/tool_contract")
 tool_contracts = load_tool_contracts_from_folder(TOOL_CONTRACT_DIR)
+
+PLACEHOLDER_PATTERN = re.compile(r"^<([^>]+)>$")
+
+def resolve_placeholders(inputs: dict, memory: dict, user_inputs: dict) -> dict:
+    """
+    Recursively replace placeholders of the form '<key>' in inputs with actual values
+    from memory or user_inputs dictionaries.
+    """
+    resolved = {}
+
+    for k, v in inputs.items():
+        if isinstance(v, str):
+            match = PLACEHOLDER_PATTERN.match(v)
+            if match:
+                key = match.group(1)
+                value = memory.get(key)
+                if value is None:
+                    value = user_inputs.get(key)
+                if value is None:
+                    logger.warning(f"Placeholder '{v}' for key '{k}' could not be resolved.")
+                else:
+                    logger.debug(f"Resolved placeholder '{v}' for key '{k}' to '{value}'.")
+                resolved[k] = value
+            else:
+                resolved[k] = v
+        elif isinstance(v, dict):
+            resolved[k] = resolve_placeholders(v, memory, user_inputs)
+        else:
+            resolved[k] = v
+
+    return resolved
 
 
 def generate_reasoned_plan(
@@ -92,9 +124,14 @@ Respond strictly in JSON:
             if key in user_inputs and key not in step_inputs:
                 step_inputs[key] = user_inputs[key]
 
-        # Split into API inputs vs local filters
-        api_inputs    = {k: v for k, v in step_inputs.items() if k in api_allowed}
-        local_filters = {k: v for k, v in step_inputs.items() if k not in api_allowed}
+        # After fully injecting user_inputs into step_inputs
+
+        resolved_inputs = resolve_placeholders(step_inputs, memory, user_inputs)
+        step["inputs"] = resolved_inputs  # update inputs in the plan
+
+        # Split into API inputs vs local filters - OUTSIDE loop
+        api_inputs    = {k: v for k, v in resolved_inputs.items() if k in api_allowed}
+        local_filters = {k: v for k, v in resolved_inputs.items() if k not in api_allowed}
 
         step["api_inputs"]    = api_inputs
         step["local_filters"] = local_filters

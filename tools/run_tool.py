@@ -1,5 +1,3 @@
-# tools/run_tool.py
-
 import requests
 import logging
 from datetime import datetime
@@ -44,15 +42,12 @@ def _parse_date(raw: str, fmt: str = None):
 
 
 def apply_local_filters(response_data: dict, tool_contract: dict, local_filters: dict) -> dict:
-    logger.warning("🔥 DIAGNOSTIC: apply_local_filters() executing at runtime ✅")
-    logger.warning("🧪 response_data.body type = %s", type(response_data.get("body")))
-    logger.warning("🧪 body preview = %r", response_data.get("body"))
-
     data_list = response_data.get("body", []) or []
     if not isinstance(data_list, list):
         raise TypeError("Expected 'body' in response_data to be a list.")
 
     rules = tool_contract.get("filtering_rules", [])
+    filtered_data = data_list
 
     for rule in rules:
         param = rule["input_param"]
@@ -66,32 +61,38 @@ def apply_local_filters(response_data: dict, tool_contract: dict, local_filters:
         method = rule.get("method", "partial")
         tolerance = rule.get("tolerance", 0.2)
         date_fmt = rule.get("date_format")
+        case_sensitive = rule.get("case_sensitive", False)
+
+        def norm(v):
+            if v is None:
+                return ""
+            return v if case_sensitive else str(v).lower()
 
         if ftype == "exact":
-            data_list = [
-                item for item in data_list
-                if str(item.get(field, "") or "").lower() == str(raw_value).lower()
+            filtered_data = [
+                item for item in filtered_data
+                if norm(item.get(field)) == norm(raw_value)
             ]
 
         elif ftype == "substring":
-            data_list = [
-                item for item in data_list
-                if str(raw_value).lower() in str(item.get(field, "") or "").lower()
+            filtered_data = [
+                item for item in filtered_data
+                if norm(raw_value) in norm(item.get(field))
             ]
 
         elif ftype == "fuzzy_substring":
-            q = str(raw_value or "").lower()
-            filtered = []
-            for item in data_list:
-                text = str(item.get(field, "") or "").lower()
+            q = norm(raw_value)
+            temp_filtered = []
+            for item in filtered_data:
+                text = norm(item.get(field))
                 score = (
                     fuzz.ratio(q, text) if method == "ratio"
                     else fuzz.token_sort_ratio(q, text) if method == "token_sort"
                     else fuzz.partial_ratio(q, text)
                 )
                 if score >= threshold:
-                    filtered.append(item)
-            data_list = filtered
+                    temp_filtered.append(item)
+            filtered_data = temp_filtered
 
         elif ftype == "numerical_fuzzy":
             try:
@@ -99,8 +100,8 @@ def apply_local_filters(response_data: dict, tool_contract: dict, local_filters:
             except Exception:
                 continue
 
-            data_list = [
-                item for item in data_list
+            filtered_data = [
+                item for item in filtered_data
                 if isinstance(item.get(field), (int, float, str)) and
                 abs(float(item[field]) - target) / max(abs(target), 1) <= tolerance
             ]
@@ -111,22 +112,21 @@ def apply_local_filters(response_data: dict, tool_contract: dict, local_filters:
             except Exception:
                 continue
 
-            filtered = []
-            for item in data_list:
+            temp_filtered = []
+            for item in filtered_data:
                 raw_item = item.get(field, "")
                 try:
                     d = _parse_date(raw_item, date_fmt)
-                    if (ftype == "date_from" and d >= cmp_date) or \
-                       (ftype == "date_to" and d <= cmp_date):
-                        filtered.append(item)
+                    if (ftype == "date_from" and d >= cmp_date) or (ftype == "date_to" and d <= cmp_date):
+                        temp_filtered.append(item)
                 except Exception:
                     continue
-            data_list = filtered
+            filtered_data = temp_filtered
 
         else:
             logger.warning(f"[WARN] Unknown filter type: {ftype}")
 
-    return {"body": data_list}
+    return {"body": filtered_data}
 
 
 def run_tool(tool_contract: dict, inputs: dict) -> dict:

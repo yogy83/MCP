@@ -1,142 +1,121 @@
-import uuid
+#!/usr/bin/env python3
+import subprocess
 import json
 import requests
-import subprocess
+import sys
+import re
 
-# --- Session Initialization ---
-session_id = str(uuid.uuid4())
-memory = {}
-DEBUG_MODE = True
+OLLAMA_CMD = ["ollama", "run", "gemma3"]
+MCP_URL    = "http://localhost:8000/process"
 
-# --- Logging ---
-def debug_log(msg):
-    if DEBUG_MODE:
-        print(f"[DEBUG] {msg}")
-
-# --- Gemma Interaction ---
-def sanitize(raw):
+def sanitize(raw: str) -> str:
     raw = raw.strip()
-    if raw.startswith("```json"):
-        return raw.removeprefix("```json").removesuffix("```" ).strip()
-    elif raw.startswith("```"):
-        return raw.removeprefix("```" ).removesuffix("```" ).strip()
-    return raw
+    if raw.startswith("```json"): raw = raw[len("```json"):]
+    if raw.endswith("```"): raw = raw[:-3]
+    return raw.strip()
 
-def gemma(prompt):
-    debug_log(f"Prompt sent to Gemma:\n{prompt}")
-    result = subprocess.run(["ollama", "run", "gemma3"], input=prompt, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    output = result.stdout.strip()
-    debug_log(f"Gemma raw output:\n{output}")
-    return output
+def gemma(prompt: str) -> str:
+    proc = subprocess.run(OLLAMA_CMD, input=prompt, text=True,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return sanitize(proc.stdout)
 
-# --- Prompt Contracts ---
-def prompt_to_contract(user_input):
+def plan_contract(user_request: str) -> dict:
     prompt = f"""
-You are a helpful assistant tasked with generating the user's goal, objective, and expected outcome based on this input: \"{user_input}\".
-Return a JSON object:
+You are a banking assistant.  The user wants to do a _banking_ operation 
+(like list accounts, check balance, view transactions).  Output EXACTLY one JSON object:
+
 {{
   "goal": "...",
   "objective": "...",
   "expected_outcome": "..."
 }}
-Avoid numeric/hallucinated fields.
+
+Do not add any extra keys or text.
+User request:
+\"\"\"{user_request}\"\"\"
 """
-    return json.loads(sanitize(gemma(prompt)))
+    return json.loads(gemma(prompt))
 
-def extract_memory_via_llm(user_input, missing_keys):
+def extract_memory(mcp_res: dict) -> dict:
     prompt = f"""
-You are a smart assistant. Extract relevant values for the following fields from the user's response.
-User input: "{user_input}"
-Fields required: {missing_keys}
-Return a JSON object with extracted memory like: {{"accountId": "105929"}}
-Only include keys you are confident about.
+You are an assistant. Extract any new facts from this MCP JSON into simple key/value pairs.  
+Return ONLY a JSON object, e.g. {{"accountCount":"3"}}, or {{}} if none.
+
+MCP response:
+{json.dumps(mcp_res, indent=2)}
 """
-    return json.loads(sanitize(gemma(prompt)))
+    return json.loads(gemma(prompt))
 
-# --- MCP Interaction ---
-def mcp_request(goal, objective, outcome, mem):
-    payload = {
-        "goal": goal,
-        "objective": objective,
-        "expected_outcome": outcome,
-        "memory": mem,
-        "history": [],
-        "last_execution_results": {},
-        "conversation_context": {},
-        "session_id": session_id
-    }
-    debug_log(f"Sending to MCP:\n{json.dumps(payload, indent=2)}")
-    res = requests.post("http://localhost:8000/process", json=payload)
-    response = res.json()
-    debug_log(f"MCP response:\n{json.dumps(response, indent=2)}")
-    return response
-
-# --- Final Summary ---
-def summarize_final_result(result):
+def summarise_mcp(user_request: str, mcp_res: dict) -> str:
     prompt = f"""
-You are a banking assistant. Summarize the following MCP result for the user:
+The user asked:
+  "{user_request}"
 
-{json.dumps(result, indent=2)}
+The system returned:
+{json.dumps(mcp_res, indent=2)}
 
-Return only a short user-friendly summary.
+Summarize for the user in one concise sentence, referencing their original request.
 """
     return gemma(prompt)
 
-# --- Agent Loop ---
-def agent_loop(user_input):
-    contract = prompt_to_contract(user_input)
-    goal, objective, expected_outcome = contract.values()
+def is_chitchat(msg: str) -> bool:
+    # very simple greeting/thanks detection
+    return bool(re.search(r"\b(hi|hello|hey|thanks|thank you)\b", msg, re.I))
 
-    def step(goal, objective, expected_outcome, memory):
-        response = mcp_request(goal, objective, expected_outcome, memory)
-
-        action_prompt = f"""
-You are a smart assistant. Given the user's goal and the system response, decide the next action.
-
-Goal: {goal}
-Objective: {objective}
-Expected Outcome: {expected_outcome}
-
-MCP Response:
-{json.dumps(response, indent=2)}
-
-Current Memory:
-{json.dumps(memory, indent=2)}
-
-What should the assistant do next? Respond in JSON:
-{{
-  "action": "ask_user | update_memory | replan | exit | summarize",
-  "prompt": "<if ask_user>",
-  "memory_update": {{ <key>: <value> }}
-}}
-"""
-        decision = json.loads(sanitize(gemma(action_prompt)))
-        memory.update(decision.get("memory_update", {}))
-
-        actions = {
-            "ask_user": lambda: input(f"Agent: {decision['prompt']}\nYou: "),
-            "update_memory": lambda: None,
-            "replan": lambda: step(goal, objective, expected_outcome, memory),
-            "summarize": lambda: print("Agent:", summarize_final_result(response.get("raw_result", {}))),
-            "exit": lambda: print("Agent: Goodbye!")
-        }
-
-        user_reply = actions.get(decision["action"], lambda: None)()
-        if decision["action"] == "ask_user" and user_reply:
-            memory.update(extract_memory_via_llm(user_reply, response.get("missing", [])))
-            step(goal, objective, expected_outcome, memory)
-
-    step(goal, objective, expected_outcome, memory)
-
-# --- Main Entry ---
 def main():
-    print("Agent started. Type 'exit' to quit.")
-    try:
-        user_input = input("You: ")
-        if user_input.lower() != "exit":
-            agent_loop(user_input)
-    except KeyboardInterrupt:
-        print("\nAgent stopped.")
+    # 1) Get numeric customer ID once
+    print("Agent: Welcome! Please enter your numeric customer ID (or 'exit' to quit).")
+    while True:
+        cid = input("You: ").strip()
+        if cid.lower() in ("exit","quit",""): 
+            print("Agent: Goodbye!"); sys.exit(0)
+        if cid.isdigit():
+            memory = {"customerId": cid}
+            break
+        print("Agent: That’s not numeric. Please enter your digits-only customer ID.")
 
-if __name__ == "__main__":
+    print("Agent: Thank you! How can I help you today?")
+
+    # 2–11) CLI chat loop
+    while True:
+        user = input("You: ").strip()
+        if not user or user.lower() in ("exit","quit"):
+            print("Agent: Goodbye!"); break
+
+        # 2a) If pure chitchat, handle locally:
+        if is_chitchat(user):
+            # you can customize these replies
+            reply = "Hi there! For account info I’ll go fetch that, otherwise happy to chat!"
+            print("Agent:", reply)
+            continue
+
+        # 3) Plan the 3-field MCP payload
+        contract = plan_contract(user)
+
+        # 4–7) Call MCP, looping on missing parameters
+        while True:
+            payload = {**contract, **memory}
+            print("Agent: Calling MCP with:")
+            print(json.dumps(payload, indent=2))
+
+            res = requests.post(MCP_URL, json=payload).json()
+
+            if res.get("next_action") == "ask_user":
+                prompt = res.get("prompt", "I need more info")
+                for key in res.get("missing", []):
+                    answer = input(f"Agent: {prompt} ({key}): ").strip()
+                    memory[key] = answer
+                # retry with updated memory (no re-plan)
+                continue
+            break
+
+        # 8) Extract any new facts into memory
+        new_mem = extract_memory(res)
+        memory.update(new_mem)
+
+        # 9) Summarize in context of the original question
+        summary = summarise_mcp(user, res)
+        print("Agent:", summary, "\n")
+
+if __name__=="__main__":
     main()

@@ -9,14 +9,14 @@ def execute_plan(plan):
     results = {}
     for idx, step in enumerate(plan):
         tool_name = step.get("tool")
-        inputs = step.get("inputs", {})
         step_key = f"step{idx+1}"
 
         tool_contract = TOOL_CONTRACTS.get(tool_name)
         if not tool_contract:
             raise ValueError(f"Tool contract not found for tool: {tool_name}")
 
-        response = run_tool(tool_contract, inputs)
+        inputs = step.get("inputs", {})
+        response = run_tool(tool_contract, inputs)  # Pass all inputs together
         results[step_key] = response
 
     return results
