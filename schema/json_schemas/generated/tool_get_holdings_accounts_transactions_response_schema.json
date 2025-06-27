@@ -1,0 +1,170 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "header": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "object",
+          "properties": {
+            "country": {
+              "type": "string"
+            },
+            "endDate": {
+              "type": "string"
+            },
+            "accountTitle": {
+              "type": "string"
+            },
+            "accountType": {
+              "type": "string"
+            },
+            "todayDate": {
+              "type": "string"
+            },
+            "totalAmount": {
+              "type": "string"
+            },
+            "totalCredits": {
+              "type": "string"
+            },
+            "street": {
+              "type": "string"
+            },
+            "addressLine1": {
+              "type": "string"
+            },
+            "postCode": {
+              "type": "string"
+            },
+            "currency": {
+              "type": "string"
+            },
+            "startDate": {
+              "type": "string"
+            },
+            "totalDebits": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "accountTitle",
+            "accountType",
+            "addressLine1",
+            "country",
+            "currency",
+            "endDate",
+            "postCode",
+            "startDate",
+            "street",
+            "todayDate",
+            "totalAmount",
+            "totalCredits",
+            "totalDebits"
+          ]
+        },
+        "audit": {
+          "type": "object",
+          "properties": {
+            "T24_time": {
+              "type": "integer"
+            },
+            "responseParse_time": {
+              "type": "integer"
+            },
+            "requestParse_time": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "T24_time",
+            "requestParse_time",
+            "responseParse_time"
+          ]
+        },
+        "page_start": {
+          "type": "integer"
+        },
+        "page_token": {
+          "type": "string"
+        },
+        "total_size": {
+          "type": "integer"
+        },
+        "page_size": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "audit",
+        "data",
+        "page_size",
+        "page_start",
+        "page_token",
+        "status",
+        "total_size"
+      ]
+    },
+    "body": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "accountId": {
+            "type": "string"
+          },
+          "narratives": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "narrative": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "narrative"
+              ]
+            }
+          },
+          "transactionReference": {
+            "type": "string"
+          },
+          "closingBalance": {
+            "type": "string"
+          },
+          "bookingDate": {
+            "type": "string"
+          },
+          "transactionCode": {
+            "type": "string"
+          },
+          "valueDate": {
+            "type": "string"
+          },
+          "creditAmount": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "accountId",
+          "bookingDate",
+          "closingBalance",
+          "creditAmount",
+          "narratives",
+          "transactionCode",
+          "transactionReference",
+          "valueDate"
+        ]
+      }
+    }
+  },
+  "required": [
+    "body",
+    "header"
+  ]
+}

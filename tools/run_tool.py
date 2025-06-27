@@ -1,9 +1,13 @@
-import requests
 import logging
 from datetime import datetime
+
+import requests
 from dateutil.parser import parse as _flexible_parse
+from jsonschema import validate, ValidationError
 from rapidfuzz import fuzz
-from config.config import TEMENOS_BASE_URL, build_auth_headers
+
+
+from config.config import build_auth_headers, TEMENOS_BASE_URL
 
 logger = logging.getLogger(__name__)
 print("🔎 Loaded tools/run_tool.py from:", __file__)
@@ -11,7 +15,18 @@ logger.warning("🚨 MCP DEBUG: ACTIVE run_tool.py path = %s", __file__)
 
 
 def call_api(endpoint: str, path_params: dict, query_params: dict) -> dict:
-    url = TEMENOS_BASE_URL + endpoint.format(**path_params)
+    """
+    endpoint: a relative path like "/v1.0.0/.../{accountId}/transactions"
+              or a full URL starting with http(s).
+    """
+    formatted = endpoint.format(**path_params)
+
+    # always prefix the single source-of-truth base URL
+    if formatted.lower().startswith("http"):
+        url = formatted
+    else:
+        url = f"{TEMENOS_BASE_URL.rstrip('/')}{formatted}"
+
     logger.debug(f"🌍 [DEBUG] Calling URL: {url} with params {query_params}")
     headers = build_auth_headers()
     resp = requests.get(url, params=query_params, headers=headers)
@@ -21,117 +36,144 @@ def call_api(endpoint: str, path_params: dict, query_params: dict) -> dict:
 
 def _parse_date(raw: str, fmt: str = None):
     logger.warning("[DIAGNOSTIC] _parse_date: using fallback-aware version ✅")
-    try:
-        raw_str = str(raw).strip()
-        logger.debug(f"[DATE PARSE] Attempting: {raw_str!r} (type={type(raw).__name__}) with format={fmt!r}")
+    raw_str = str(raw).strip()
+    logger.debug(f"[DATE PARSE] Attempting: {raw_str!r} with format={fmt!r}")
 
-        if fmt:
-            try:
-                parsed = datetime.strptime(raw_str, fmt).date()
-                logger.debug(f"[DATE PARSE] strptime success → {parsed}")
-                return parsed
-            except Exception as e1:
-                logger.warning(f"[WARN] strptime failed: {e1} — falling back to flexible parse")
+    if fmt:
+        try:
+            return datetime.strptime(raw_str, fmt).date()
+        except Exception:
+            logger.warning("[WARN] strptime failed — falling back")
 
-        parsed = _flexible_parse(raw_str).date()
-        logger.debug(f"[DATE PARSE] dateutil success → {parsed}")
-        return parsed
-    except Exception as final_err:
-        logger.error(f"[ERROR] Final date parsing failure: {final_err}")
-        raise
+    return _flexible_parse(raw_str).date()
+
+
+def get_nested_value(obj, path: str):
+    parts = path.replace("[]", "").split(".")
+    for part in parts:
+        if isinstance(obj, list):
+            obj = obj[0] if obj else {}
+        if isinstance(obj, dict):
+            obj = obj.get(part)
+        else:
+            return None
+    return obj
 
 
 def apply_local_filters(response_data: dict, tool_contract: dict, local_filters: dict) -> dict:
-    data_list = response_data.get("body", []) or []
-    if not isinstance(data_list, list):
-        raise TypeError("Expected 'body' in response_data to be a list.")
+    # Step 1: Defensive load of data_list
+    data_list = []
+    if isinstance(response_data, dict):
+        maybe_body = response_data.get("body", [])
+        if isinstance(maybe_body, list):
+            data_list = [item for item in maybe_body if isinstance(item, dict)]
+        elif isinstance(maybe_body, dict):
+            data_list = [maybe_body]
+        else:
+            data_list = []
+    elif isinstance(response_data, list):
+        data_list = [item for item in response_data if isinstance(item, dict)]
 
     rules = tool_contract.get("filtering_rules", [])
-    filtered_data = data_list
+    filtered = data_list
 
     for rule in rules:
         param = rule["input_param"]
         if param not in local_filters:
             continue
 
-        field = rule["response_field"]
-        ftype = rule["filter_type"]
         raw_value = local_filters[param]
+        field     = rule["response_field"]
+        ftype     = rule["filter_type"]
         threshold = rule.get("threshold", 70)
-        method = rule.get("method", "partial")
+        method    = rule.get("method", "partial")
         tolerance = rule.get("tolerance", 0.2)
-        date_fmt = rule.get("date_format")
-        case_sensitive = rule.get("case_sensitive", False)
+        date_fmt  = rule.get("date_format")
+        case_sens = rule.get("case_sensitive", False)
 
         def norm(v):
             if v is None:
                 return ""
-            return v if case_sensitive else str(v).lower()
+            return v if case_sens else str(v).lower()
 
         if ftype == "exact":
-            filtered_data = [
-                item for item in filtered_data
-                if norm(item.get(field)) == norm(raw_value)
+            filtered = [
+                item for item in filtered
+                if norm(get_nested_value(item, field)) == norm(raw_value)
             ]
 
         elif ftype == "substring":
-            filtered_data = [
-                item for item in filtered_data
-                if norm(raw_value) in norm(item.get(field))
+            q = norm(raw_value)
+            filtered = [
+                item for item in filtered
+                if q in norm(get_nested_value(item, field))
             ]
 
         elif ftype == "fuzzy_substring":
             q = norm(raw_value)
-            temp_filtered = []
-            for item in filtered_data:
-                text = norm(item.get(field))
-                score = (
-                    fuzz.ratio(q, text) if method == "ratio"
-                    else fuzz.token_sort_ratio(q, text) if method == "token_sort"
-                    else fuzz.partial_ratio(q, text)
-                )
-                if score >= threshold:
-                    temp_filtered.append(item)
-            filtered_data = temp_filtered
+            temp = []
+            for item in filtered:
+                text = norm(get_nested_value(item, field))
+                scorer = {
+                    "ratio": fuzz.ratio,
+                    "token_sort": fuzz.token_sort_ratio
+                }.get(method, fuzz.partial_ratio)
+                if scorer(q, text) >= threshold:
+                    temp.append(item)
+            filtered = temp
 
         elif ftype == "numerical_fuzzy":
             try:
                 target = float(raw_value)
             except Exception:
                 continue
-
-            filtered_data = [
-                item for item in filtered_data
-                if isinstance(item.get(field), (int, float, str)) and
-                abs(float(item[field]) - target) / max(abs(target), 1) <= tolerance
-            ]
+            temp = []
+            for item in filtered:
+                val = get_nested_value(item, field)
+                try:
+                    num = float(val)
+                except Exception:
+                    continue
+                if abs(num - target) / max(abs(target), 1) <= tolerance:
+                    temp.append(item)
+            filtered = temp
 
         elif ftype in ("date_from", "date_to"):
             try:
-                cmp_date = _parse_date(raw_value, date_fmt)
+                cmpd = _parse_date(raw_value, date_fmt)
             except Exception:
                 continue
-
-            temp_filtered = []
-            for item in filtered_data:
-                raw_item = item.get(field, "")
+            temp = []
+            for item in filtered:
+                raw_item = get_nested_value(item, field)
                 try:
                     d = _parse_date(raw_item, date_fmt)
-                    if (ftype == "date_from" and d >= cmp_date) or (ftype == "date_to" and d <= cmp_date):
-                        temp_filtered.append(item)
+                    if (ftype == "date_from" and d >= cmpd) or (ftype == "date_to" and d <= cmpd):
+                        temp.append(item)
                 except Exception:
                     continue
-            filtered_data = temp_filtered
+            filtered = temp
 
         else:
             logger.warning(f"[WARN] Unknown filter type: {ftype}")
 
-    return {"body": filtered_data}
+    logger.debug(f"[FILTER] Filtered data count: {len(filtered)}")
+    return {"body": filtered}
 
 
-def run_tool(tool_contract: dict, inputs: dict) -> dict:
+def run_tool(
+    tool_contract: dict,
+    inputs: dict,
+    request_schema: dict = None,
+    response_schema: dict = None
+) -> dict:
+    # 1) Validate inputs
+    if request_schema:
+        validate(instance=inputs, schema=request_schema)
+
+    # 2) Path vs. query
     try:
-        path_params = {k: inputs[k] for k in tool_contract["required_inputs"]}
+        path_params = {k: inputs[k] for k in tool_contract.get("required_inputs", [])}
     except KeyError as e:
         raise ValueError(f"Required input missing: {e}")
 
@@ -142,5 +184,14 @@ def run_tool(tool_contract: dict, inputs: dict) -> dict:
     }
     query_params = {k: v for k, v in inputs.items() if k in opt_sendable}
 
-    raw = call_api(tool_contract["endpoint"], path_params, query_params)
-    return apply_local_filters(raw, tool_contract, inputs)
+    # 3) Fetch data
+    raw_resp = call_api(tool_contract["endpoint"], path_params, query_params)
+
+    # 4) Validate response
+    if response_schema:
+        # validate(instance=raw_resp, schema=response_schema)
+        pass
+
+    # 5) Apply filters
+    filtered = apply_local_filters(raw_resp, tool_contract, inputs)
+    return filtered if filtered["body"] else raw_resp

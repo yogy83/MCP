@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "header": {
+      "type": "object",
+      "properties": {
+        "audit": {
+          "type": "object",
+          "properties": {
+            "T24_time": {
+              "type": "integer"
+            },
+            "responseParse_time": {
+              "type": "integer"
+            },
+            "requestParse_time": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "T24_time",
+            "requestParse_time",
+            "responseParse_time"
+          ]
+        },
+        "page_start": {
+          "type": "integer"
+        },
+        "page_token": {
+          "type": "string"
+        },
+        "total_size": {
+          "type": "integer"
+        },
+        "page_size": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "audit",
+        "page_size",
+        "page_start",
+        "page_token",
+        "status",
+        "total_size"
+      ]
+    },
+    "body": {
+      "type": "array"
+    }
+  },
+  "required": [
+    "body",
+    "header"
+  ]
+}

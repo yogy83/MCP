@@ -1,0 +1,54 @@
+{
+  "tool_name": "tool_get_holdings_accounts_transactions",
+  "endpoint": "/api/v5.0.0/holdings/accounts/{accountId}/transactions",
+  "required_inputs": [
+    "accountId"
+  ],
+  "optional_inputs": [],
+  "filtering_rules": [
+    {
+      "input_param": "accountId",
+      "response_field": "body.accountId",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "bookingDate",
+      "response_field": "body.bookingDate",
+      "filter_type": "date"
+    },
+    {
+      "input_param": "closingBalance",
+      "response_field": "body.closingBalance",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "creditAmount",
+      "response_field": "body.creditAmount",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "narrative",
+      "response_field": "body.narratives.narrative",
+      "filter_type": "substring"
+    },
+    {
+      "input_param": "transactionCode",
+      "response_field": "body.transactionCode",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "transactionReference",
+      "response_field": "body.transactionReference",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "valueDate",
+      "response_field": "body.valueDate",
+      "filter_type": "date"
+    }
+  ],
+  "json_schema": {
+    "request": null,
+    "response": "schema/json_schemas/generated/tool_get_holdings_accounts_transactions_response_schema.json"
+  }
+}

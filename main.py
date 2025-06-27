@@ -1,121 +1,415 @@
-#!/usr/bin/env python3
-import subprocess
+import uuid
+import logging
 import json
-import requests
-import sys
-import re
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, JSONResponse
+from pydantic import BaseModel
 
-OLLAMA_CMD = ["ollama", "run", "gemma3"]
-MCP_URL    = "http://localhost:8000/process"
+from core.mcp import process_user_request
 
-def sanitize(raw: str) -> str:
-    raw = raw.strip()
-    if raw.startswith("```json"): raw = raw[len("```json"):]
-    if raw.endswith("```"): raw = raw[:-3]
-    return raw.strip()
+logger = logging.getLogger("main")
+logging.basicConfig(level=logging.INFO)
 
-def gemma(prompt: str) -> str:
-    proc = subprocess.run(OLLAMA_CMD, input=prompt, text=True,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    return sanitize(proc.stdout)
+app = FastAPI(
+    title="MCP API",
+    version="1.0.0",
+    docs_url="/docs",
+)
 
-def plan_contract(user_request: str) -> dict:
-    prompt = f"""
-You are a banking assistant.  The user wants to do a _banking_ operation 
-(like list accounts, check balance, view transactions).  Output EXACTLY one JSON object:
+# --- CORS ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-{{
-  "goal": "...",
-  "objective": "...",
-  "expected_outcome": "..."
-}}
+def get_all_tools():
+    """
+    Load the list of tools from the local JSON registry file.
+    
+    Returns:
+        list: List of tool metadata dictionaries, or empty list on failure.
+    """
+    try:
+        with open("./schema/tool_registry_llm.json", "r") as f:
+            return json.load(f)
+    except Exception as ex:
+        logger.warning(f"Could not load tool registry: {ex}")
+        return []
 
-Do not add any extra keys or text.
-User request:
-\"\"\"{user_request}\"\"\"
-"""
-    return json.loads(gemma(prompt))
+class ProcessRequest(BaseModel):
+    """
+    Pydantic model for validating REST /process endpoint request body.
+    """
+    goal: str
+    objective: str
+    expected_outcome: str
 
-def extract_memory(mcp_res: dict) -> dict:
-    prompt = f"""
-You are an assistant. Extract any new facts from this MCP JSON into simple key/value pairs.  
-Return ONLY a JSON object, e.g. {{"accountCount":"3"}}, or {{}} if none.
+@app.post("/process")
+async def handle_process(request: ProcessRequest):
+    """
+    Handle a classic REST POST /process request.
 
-MCP response:
-{json.dumps(mcp_res, indent=2)}
-"""
-    return json.loads(gemma(prompt))
+    Args:
+        request (ProcessRequest): JSON body containing goal, objective, expected_outcome.
 
-def summarise_mcp(user_request: str, mcp_res: dict) -> str:
-    prompt = f"""
-The user asked:
-  "{user_request}"
+    Returns:
+        dict: The MCP processing result with a generated session_id.
+    """
+    session_id = str(uuid.uuid4())
+    response = process_user_request(request.dict(), session_id)
+    return {
+        "session_id": session_id,
+        **response
+    }
 
-The system returned:
-{json.dumps(mcp_res, indent=2)}
+@app.get("/capabilities")
+async def get_capabilities():
+    """
+    Return MCP version info, available transports, and tools.
 
-Summarize for the user in one concise sentence, referencing their original request.
-"""
-    return gemma(prompt)
+    Returns:
+        dict: MCP capabilities including transports and registered tools.
+    """
+    return {
+        "mcp_version": "1.0.0",
+        "transports": [
+            {"type": "REST", "path": "/process"},
+            {"type": "JSON-RPC", "path": "/mcp"},
+            {"type": "SSE", "path": "/mcp/stream"},
+            {"type": "WebSocket", "path": "/ws/mcp"},
+        ],
+        "tools": get_all_tools(),
+    }
 
-def is_chitchat(msg: str) -> bool:
-    # very simple greeting/thanks detection
-    return bool(re.search(r"\b(hi|hello|hey|thanks|thank you)\b", msg, re.I))
+@app.post("/mcp")
+async def handle_mcp(request: Request):
+    """
+    Handle JSON-RPC 2.0 POST requests on /mcp endpoint.
 
-def main():
-    # 1) Get numeric customer ID once
-    print("Agent: Welcome! Please enter your numeric customer ID (or 'exit' to quit).")
-    while True:
-        cid = input("You: ").strip()
-        if cid.lower() in ("exit","quit",""): 
-            print("Agent: Goodbye!"); sys.exit(0)
-        if cid.isdigit():
-            memory = {"customerId": cid}
-            break
-        print("Agent: That’s not numeric. Please enter your digits-only customer ID.")
+    Supports methods:
+    - initialize: returns MCP version, tools, transports
+    - tools/list: lists registered tools
+    - tools/call, process, call: execute a tool call with required params
 
-    print("Agent: Thank you! How can I help you today?")
+    Args:
+        request (Request): Incoming HTTP request.
 
-    # 2–11) CLI chat loop
-    while True:
-        user = input("You: ").strip()
-        if not user or user.lower() in ("exit","quit"):
-            print("Agent: Goodbye!"); break
+    Returns:
+        dict: JSON-RPC response object with result or error.
+    """
+    payload = await request.json()
+    logger.info(f"JSON-RPC Payload: {payload}")
 
-        # 2a) If pure chitchat, handle locally:
-        if is_chitchat(user):
-            # you can customize these replies
-            reply = "Hi there! For account info I’ll go fetch that, otherwise happy to chat!"
-            print("Agent:", reply)
-            continue
+    method = payload.get("method")
+    params = payload.get("params", {})
+    rpc_id = payload.get("id")
 
-        # 3) Plan the 3-field MCP payload
-        contract = plan_contract(user)
+    try:
+        if method == "initialize":
+            tools = await mcp_system.mcp.list_tools()
+            tools_json = [t.model_dump() if hasattr(t, "model_dump") else t.dict() for t in tools]
+            return {
+                "jsonrpc": "2.0",
+                "result": {
+                    "mcp_version": "1.0.0",
+                    "tools": tools_json,
+                    "transports": [
+                        {"type": "REST", "path": "/process"},
+                        {"type": "JSON-RPC", "path": "/mcp"},
+                        {"type": "SSE", "path": "/mcp/stream"},
+                        {"type": "WebSocket", "path": "/ws/mcp"}
+                    ],
+                },
+                "id": rpc_id
+            }
 
-        # 4–7) Call MCP, looping on missing parameters
+        elif method == "tools/list":
+            tools = await mcp_system.mcp.list_tools()
+            tools_json = [t.model_dump() if hasattr(t, "model_dump") else t.dict() for t in tools]
+            return {
+                "jsonrpc": "2.0",
+                "result": tools_json,
+                "id": rpc_id
+            }
+
+        elif method in ("tools/call", "process", "call"):
+            required = ["goal", "objective", "expected_outcome"]
+            if not all(k in params for k in required):
+                return {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32602, "message": "Invalid params: goal, objective, expected_outcome are required."},
+                    "id": rpc_id
+                }
+            session_id = params.get("session_id", str(uuid.uuid4()))
+            result = process_user_request(params, session_id)
+            return {
+                "jsonrpc": "2.0",
+                "result": {
+                    "session_id": session_id,
+                    **result
+                },
+                "id": rpc_id
+            }
+
+        else:
+            return {
+                "jsonrpc": "2.0",
+                "error": {"code": -32601, "message": "Method not found"},
+                "id": rpc_id
+            }
+
+    except Exception as ex:
+        logger.exception("Exception in JSON-RPC handler")
+        return {
+            "jsonrpc": "2.0",
+            "error": {
+                "code": -32000,
+                "message": f"Internal server error: {str(ex)}"
+            },
+            "id": rpc_id
+        }
+
+def sse_format(data: str) -> str:
+    """
+    Format a string message according to Server-Sent Events protocol.
+
+    Args:
+        data (str): Data string to send.
+
+    Returns:
+        str: Formatted SSE message string.
+    """
+    return f"data: {data}\n\n"
+
+@app.post("/mcp/stream")
+async def handle_mcp_stream(request: Request):
+    """
+    Handle JSON-RPC 2.0 requests over Server-Sent Events (SSE).
+
+    Returns a stream of events representing JSON-RPC responses.
+
+    Args:
+        request (Request): Incoming HTTP request.
+
+    Returns:
+        StreamingResponse: SSE stream of JSON-RPC responses.
+    """
+    payload = await request.json()
+    logger.info(f"SSE JSON-RPC Payload: {payload}")
+
+    method = payload.get("method")
+    params = payload.get("params", {})
+    rpc_id = payload.get("id")
+
+    async def event_generator():
+        try:
+            if method == "initialize":
+                tools = await mcp_system.mcp.list_tools()
+                tools_json = [t.model_dump() if hasattr(t, "model_dump") else t.dict() for t in tools]
+                response = {
+                    "jsonrpc": "2.0",
+                    "result": {
+                        "mcp_version": "1.0.0",
+                        "tools": tools_json,
+                        "transports": [
+                            {"type": "REST", "path": "/process"},
+                            {"type": "JSON-RPC", "path": "/mcp"},
+                            {"type": "SSE", "path": "/mcp/stream"},
+                            {"type": "WebSocket", "path": "/ws/mcp"}
+                        ],
+                    },
+                    "id": rpc_id
+                }
+                yield sse_format(json.dumps(response))
+
+            elif method == "tools/list":
+                tools = await mcp_system.mcp.list_tools()
+                tools_json = [t.model_dump() if hasattr(t, "model_dump") else t.dict() for t in tools]
+                response = {
+                    "jsonrpc": "2.0",
+                    "result": tools_json,
+                    "id": rpc_id
+                }
+                yield sse_format(json.dumps(response))
+
+            elif method in ("tools/call", "process", "call"):
+                required = ["goal", "objective", "expected_outcome"]
+                if not all(k in params for k in required):
+                    response = {
+                        "jsonrpc": "2.0",
+                        "error": {"code": -32602, "message": "Invalid params: goal, objective, expected_outcome are required."},
+                        "id": rpc_id
+                    }
+                    yield sse_format(json.dumps(response))
+                    return
+
+                session_id = params.get("session_id", str(uuid.uuid4()))
+                result = process_user_request(params, session_id)
+
+                response = {
+                    "jsonrpc": "2.0",
+                    "result": {
+                        "session_id": session_id,
+                        **result
+                    },
+                    "id": rpc_id
+                }
+                yield sse_format(json.dumps(response))
+
+            else:
+                response = {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32601, "message": "Method not found"},
+                    "id": rpc_id
+                }
+                yield sse_format(json.dumps(response))
+
+        except Exception as ex:
+            logger.exception("Exception in SSE handler")
+            response = {
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32000,
+                    "message": f"Internal server error: {str(ex)}"
+                },
+                "id": rpc_id
+            }
+            yield sse_format(json.dumps(response))
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+@app.websocket("/ws/mcp")
+async def websocket_endpoint(websocket: WebSocket):
+    """
+    WebSocket endpoint handling JSON-RPC 2.0 messages.
+
+    Supports:
+    - initialize
+    - tools/list
+    - tools/call, process, call
+
+    Args:
+        websocket (WebSocket): The WebSocket connection instance.
+
+    Behavior:
+        Continuously receives JSON-RPC requests and sends back JSON-RPC responses.
+        Closes on WebSocket disconnect.
+    """
+    await websocket.accept()
+    try:
         while True:
-            payload = {**contract, **memory}
-            print("Agent: Calling MCP with:")
-            print(json.dumps(payload, indent=2))
+            data = await websocket.receive_json()
+            logger.info(f"WebSocket JSON-RPC Payload: {data}")
 
-            res = requests.post(MCP_URL, json=payload).json()
+            method = data.get("method")
+            params = data.get("params", {})
+            rpc_id = data.get("id")
 
-            if res.get("next_action") == "ask_user":
-                prompt = res.get("prompt", "I need more info")
-                for key in res.get("missing", []):
-                    answer = input(f"Agent: {prompt} ({key}): ").strip()
-                    memory[key] = answer
-                # retry with updated memory (no re-plan)
-                continue
-            break
+            try:
+                if method == "initialize":
+                    tools = await mcp_system.mcp.list_tools()
+                    tools_json = [t.model_dump() if hasattr(t, "model_dump") else t.dict() for t in tools]
+                    response = {
+                        "jsonrpc": "2.0",
+                        "result": {
+                            "mcp_version": "1.0.0",
+                            "tools": tools_json,
+                            "transports": [
+                                {"type": "REST", "path": "/process"},
+                                {"type": "JSON-RPC", "path": "/mcp"},
+                                {"type": "SSE", "path": "/mcp/stream"},
+                                {"type": "WebSocket", "path": "/ws/mcp"}
+                            ],
+                        },
+                        "id": rpc_id
+                    }
+                    await websocket.send_json(response)
 
-        # 8) Extract any new facts into memory
-        new_mem = extract_memory(res)
-        memory.update(new_mem)
+                elif method == "tools/list":
+                    tools = await mcp_system.mcp.list_tools()
+                    tools_json = [t.model_dump() if hasattr(t, "model_dump") else t.dict() for t in tools]
+                    response = {
+                        "jsonrpc": "2.0",
+                        "result": tools_json,
+                        "id": rpc_id
+                    }
+                    await websocket.send_json(response)
 
-        # 9) Summarize in context of the original question
-        summary = summarise_mcp(user, res)
-        print("Agent:", summary, "\n")
+                elif method in ("tools/call", "process", "call"):
+                    required = ["goal", "objective", "expected_outcome"]
+                    if not all(k in params for k in required):
+                        response = {
+                            "jsonrpc": "2.0",
+                            "error": {"code": -32602, "message": "Invalid params: goal, objective, expected_outcome are required."},
+                            "id": rpc_id
+                        }
+                        await websocket.send_json(response)
+                        continue
 
-if __name__=="__main__":
-    main()
+                    session_id = params.get("session_id", str(uuid.uuid4()))
+                    result = process_user_request(params, session_id)
+                    response = {
+                        "jsonrpc": "2.0",
+                        "result": {
+                            "session_id": session_id,
+                            **result
+                        },
+                        "id": rpc_id
+                    }
+                    await websocket.send_json(response)
+
+                else:
+                    response = {
+                        "jsonrpc": "2.0",
+                        "error": {"code": -32601, "message": "Method not found"},
+                        "id": rpc_id
+                    }
+                    await websocket.send_json(response)
+
+            except Exception as ex:
+                logger.exception("Exception in WebSocket handler")
+                response = {
+                    "jsonrpc": "2.0",
+                    "error": {
+                        "code": -32000,
+                        "message": f"Internal server error: {str(ex)}"
+                    },
+                    "id": rpc_id
+                }
+                await websocket.send_json(response)
+
+    except WebSocketDisconnect:
+        logger.info("WebSocket disconnected")
+
+@app.get("/health")
+async def health():
+    """
+    Health check endpoint.
+
+    Returns:
+        dict: Service health status.
+    """
+    return {"status": "ok", "initialized": True}
+
+@app.on_event("startup")
+async def on_startup():
+    """
+    Log service readiness info at application startup.
+    """
+    logger.info("=" * 50)
+    logger.info("🚀 MCP Multi-Transport Service Ready!")
+    logger.info("REST:       POST /process")
+    logger.info("JSON-RPC:   POST /mcp")
+    logger.info("SSE:        POST /mcp/stream")
+    logger.info("WebSocket:  /ws/mcp")
+    logger.info("Health:     GET /health")
+    logger.info("Capabilities: GET /capabilities")
+    logger.info("=" * 50)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

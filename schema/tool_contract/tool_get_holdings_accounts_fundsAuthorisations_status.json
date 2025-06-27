@@ -1,0 +1,19 @@
+{
+  "tool_name": "tool_get_holdings_accounts_fundsAuthorisations_status",
+  "endpoint": "/api/v5.0.0/holdings/accounts/{accountId}/fundsAuthorisations/status",
+  "required_inputs": [
+    "accountId"
+  ],
+  "optional_inputs": [],
+  "filtering_rules": [
+    {
+      "input_param": "status",
+      "response_field": "header.status",
+      "filter_type": "exact"
+    }
+  ],
+  "json_schema": {
+    "request": null,
+    "response": "schema/json_schemas/generated/tool_get_holdings_accounts_fundsAuthorisations_status_response_schema.json"
+  }
+}

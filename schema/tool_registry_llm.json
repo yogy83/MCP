@@ -1,0 +1,82 @@
+[
+  {
+    "name": "tool_get_holdings_accounts_fundsAuthorisations_status",
+    "description": "This tool checks the status of funds authorizations for a specific holding account. You\u2019ll need to provide the account ID to get the authorization status information.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "accountId": {
+          "type": "string",
+          "description": "The ID of the account whose authorization status you request."
+        }
+      },
+      "required": [
+        "accountId"
+      ]
+    }
+  },
+  {
+    "name": "tool_get_holdings_accounts_statements",
+    "description": "This tool fetches detailed statements for a holding account, including transaction history and balances. You'll need to provide the account ID to get the relevant statement information.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "accountId": {
+          "type": "string",
+          "description": "Identifies the specific account for statement retrieval."
+        }
+      },
+      "required": [
+        "accountId"
+      ]
+    }
+  },
+  {
+    "name": "tool_get_holdings_accounts_transactions",
+    "description": "This tool allows you to view transaction history for a specific account. You\u2019ll need to provide the account ID to see all transactions associated with that account.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "accountId": {
+          "type": "string",
+          "description": "Identifies the specific account to retrieve transactions from."
+        }
+      },
+      "required": [
+        "accountId"
+      ]
+    }
+  },
+  {
+    "name": "tool_get_holdings_accounts_cards",
+    "description": "This tool allows you to view details about specific credit cards associated with a holding account. You\u2019ll need the account ID to see information like the card number, expiry date, and card type.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "accountId": {
+          "type": "string",
+          "description": "Identifies the specific account to retrieve card details."
+        }
+      },
+      "required": [
+        "accountId"
+      ]
+    }
+  },
+  {
+    "name": "tool_get_holdings_accounts_emergencyBlocks_status",
+    "description": "This tool checks the status of emergency blocks associated with a holding account. You\u2019ll need to provide the account ID to see the current status of these blocks.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "accountId": {
+          "type": "string",
+          "description": "The ID of the holding accounts to check."
+        }
+      },
+      "required": [
+        "accountId"
+      ]
+    }
+  }
+]

@@ -1,0 +1,62 @@
+{
+  "header": {
+    "audit": {
+      "T24_time": 844,
+      "responseParse_time": 0,
+      "requestParse_time": 0
+    },
+    "page_start": 1,
+    "page_token": "202405164366873270.02,99",
+    "total_size": 2,
+    "page_size": 99,
+    "status": "success"
+  },
+  "body": [
+    {
+      "cancellationReason": "Cards Destroyed",
+      "displayName": "Diners Club",
+      "cardIssueId": "DINE.4346554412345678",
+      "cardType": "DINE",
+      "cardDisplayNumber": "4346********5678",
+      "versionNumber": "1",
+      "fullCardNumber": "4346554412345678",
+      "expiryDate": "2019-04-16",
+      "cardNames": [
+        {
+          "cardName": "DAVID MILLER"
+        }
+      ],
+      "accountIds": [
+        {
+          "accountId": "105929"
+        }
+      ],
+      "currencyId": "USD",
+      "issueDate": "2015-04-17",
+      "cardStatus": "CARD.ISSUED",
+      "cancellationDate": "2019-04-16"
+    },
+    {
+      "expiryDate": "2022-04-21",
+      "cardNames": [
+        {
+          "cardName": "DAVID MILLER"
+        }
+      ],
+      "accountIds": [
+        {
+          "accountId": "105929"
+        }
+      ],
+      "displayName": "Diners Club",
+      "cardIssueId": "DINE.4346554412345679",
+      "cardType": "DINE",
+      "currencyId": "USD",
+      "issueDate": "2019-04-16",
+      "cardDisplayNumber": "4346********5679",
+      "cardStatus": "CARD.ISSUED",
+      "versionNumber": "1",
+      "fullCardNumber": "4346554412345679"
+    }
+  ]
+}

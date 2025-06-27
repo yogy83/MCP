@@ -1,0 +1,114 @@
+{
+  "tool_name": "tool_get_holdings_accounts_statements",
+  "endpoint": "/api/v5.0.0/holdings/accounts/{accountId}/statements",
+  "required_inputs": [
+    "accountId"
+  ],
+  "optional_inputs": [],
+  "filtering_rules": [
+    {
+      "input_param": "bookingDate",
+      "response_field": "body.bookingDate",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "closingBalance",
+      "response_field": "body.closingBalance",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "creditAmount",
+      "response_field": "body.creditAmount",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "narrative",
+      "response_field": "body.narratives.narrative",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "transactionCode",
+      "response_field": "body.transactionCode",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "transactionReference",
+      "response_field": "body.transactionReference",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "valueDate",
+      "response_field": "body.valueDate",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "accountNumber",
+      "response_field": "header.data.accountNumber",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "accountTitle",
+      "response_field": "header.data.accountTitle",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "accountType",
+      "response_field": "header.data.accountType",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "country",
+      "response_field": "header.data.country",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "currency",
+      "response_field": "header.data.currency",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "endDate",
+      "response_field": "header.data.endDate",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "startDate",
+      "response_field": "header.data.startDate",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "addressLine1",
+      "response_field": "header.data.addressLine1",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "postCode",
+      "response_field": "header.data.postCode",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "todayDate",
+      "response_field": "header.data.todayDate",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "totalAmount",
+      "response_field": "header.data.totalAmount",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "totalCredits",
+      "response_field": "header.data.totalCredits",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "totalDebits",
+      "response_field": "header.data.totalDebits",
+      "filter_type": "exact"
+    }
+  ],
+  "json_schema": {
+    "request": null,
+    "response": "schema/json_schemas/generated/tool_get_holdings_accounts_statements_response_schema.json"
+  }
+}

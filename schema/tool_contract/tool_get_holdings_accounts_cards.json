@@ -1,0 +1,69 @@
+{
+  "tool_name": "tool_get_holdings_accounts_cards",
+  "endpoint": "/api/v5.0.0/holdings/accounts/{accountId}/cards",
+  "required_inputs": [
+    "accountId"
+  ],
+  "optional_inputs": [],
+  "filtering_rules": [
+    {
+      "input_param": "cancellationReason",
+      "response_field": "body.cancellationReason",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "displayName",
+      "response_field": "body.displayName",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "cardIssueId",
+      "response_field": "body.cardIssueId",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "cardType",
+      "response_field": "body.cardType",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "cardDisplayNumber",
+      "response_field": "body.cardDisplayNumber",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "cardStatus",
+      "response_field": "body.cardStatus",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "currencyId",
+      "response_field": "body.currencyId",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "expiryDate",
+      "response_field": "body.expiryDate",
+      "filter_type": "date"
+    },
+    {
+      "input_param": "fullCardNumber",
+      "response_field": "body.fullCardNumber",
+      "filter_type": "exact"
+    },
+    {
+      "input_param": "issueDate",
+      "response_field": "body.issueDate",
+      "filter_type": "date"
+    },
+    {
+      "input_param": "versionNumber",
+      "response_field": "body.versionNumber",
+      "filter_type": "exact"
+    }
+  ],
+  "json_schema": {
+    "request": null,
+    "response": "schema/json_schemas/generated/tool_get_holdings_accounts_cards_response_schema.json"
+  }
+}

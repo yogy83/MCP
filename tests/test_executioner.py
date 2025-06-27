@@ -17,7 +17,8 @@ def test_execute_plan_two_steps(monkeypatch):
         "beta":  {"endpoint": "/dummy/beta",  "required_inputs": ["y"], "params": {"y": {"type": "string"}}}
     }
 
-    def dummy_run_tool(tool_contract, inputs):
+    # Updated dummy_run_tool to accept 4 parameters
+    def dummy_run_tool(tool_contract, inputs, request_schema=None, response_schema=None):
         if tool_contract["endpoint"] == "/dummy/alpha":
             return {"alpha_result": inputs}
         elif tool_contract["endpoint"] == "/dummy/beta":
@@ -48,7 +49,8 @@ def test_execute_plan_propagates_exception(monkeypatch):
         "gamma": {"endpoint": "/dummy/gamma", "required_inputs": ["z"], "params": {"z": {"type": "string"}}}
     }
 
-    def boom(tool_contract, inputs):
+    # Updated boom to accept 4 parameters
+    def boom(tool_contract, inputs, request_schema=None, response_schema=None):
         raise RuntimeError(f"fail on {tool_contract['endpoint']}")
 
     monkeypatch.setattr(executioner, "TOOL_CONTRACTS", dummy_contracts)

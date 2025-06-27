@@ -1,9 +1,0 @@
-{
-  "tool_name": "get_account_balance",
-  "endpoint": "/v1.0.0/holdings/accounts/{accountId}",
-  "required_inputs": [
-    "accountId"
-  ],
-  "optional_inputs": [],
-  "filtering_rules": []
-}

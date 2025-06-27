@@ -1,180 +1,129 @@
 # tests/test_mcp_server.py
+# Pytest suite for MCP JSON-RPC interface in core/mcp_server.py
 
 import os
 import sys
-import json
-import uuid
-from pathlib import Path
-
 import pytest
 from fastapi.testclient import TestClient
 
-# Ensure project root is on sys.path so `import core.mcp_server` works
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# Ensure project root is on sys.path so imports resolve correctly
+dir_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if dir_root not in sys.path:
+    sys.path.insert(0, dir_root)
 
-import core.mcp_server as server
-
-client = TestClient(server.app)
-
+from core.mcp_server import mcp
 
 @pytest.fixture(autouse=True)
-def fake_log_path(tmp_path, monkeypatch):
+def mock_processing(monkeypatch):
     """
-    Redirect the server's LOG_PATH to a temp dir so we can inspect logs.
+    Replace the real process_user_request with a dummy that
+    returns a predictable dict. This isolates the JSON-RPC layer.
     """
-    monkeypatch.setattr(server, "LOG_PATH", tmp_path)
-    return tmp_path
+    from core import mcp_server
 
+    def fake_process_user_request(params, session_id):
+        return {
+            "status": "success",
+            "session_id": session_id,
+            "input": params
+        }
 
-def test_invalid_json_returns_422():
-    """
-    Sending malformed JSON is rejected by FastAPI/Pydantic → HTTP 422.
-    """
-    r = client.post(
-        "/process",
-        data="not-a-json",
-        headers={"Content-Type": "application/json"}
+    monkeypatch.setattr(
+        mcp_server,
+        "process_user_request",
+        fake_process_user_request
     )
-    assert r.status_code == 422
 
-    body = r.json()
-    # Should be a list of validation errors
-    assert isinstance(body.get("detail"), list)
-    # Error message should mention JSON decoding
-    msgs = [err.get("msg", "") for err in body["detail"]]
-    assert any("Expecting value" in m or "JSON" in m for m in msgs)
+# Create a TestClient against the raw JSON-RPC sub-app
+app = mcp.streamable_http_app()
+client = TestClient(app)
 
 
-@pytest.mark.parametrize("missing_field", ["goal", "objective", "expected_outcome"])
-def test_missing_required_field_returns_422(missing_field):
-    """
-    Omitting any required field → HTTP 422 from FastAPI/Pydantic.
-    """
+def test_initialize_method():
+    """Tests that 'initialize' returns a proper capabilities object."""
     payload = {
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {},
+        "id": 1
+    }
+
+    response = client.post("/", json=payload)
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["jsonrpc"] == "2.0"
+    assert data["id"] == 1
+
+    result = data["result"]
+    assert isinstance(result, dict)
+
+    # core fields
+    assert result["serverName"] == "MCP Server"
+    assert isinstance(result["schemaVersion"], str)
+
+    # transports
+    transports = result.get("transports")
+    assert isinstance(transports, list)
+    # should at least support HTTP
+    assert "http" in transports or "streamable_http" in transports
+
+    # tools list must include our tools_call
+    tools = result.get("tools")
+    assert isinstance(tools, list)
+    assert any(tool.get("name") == "tools_call" for tool in tools)
+
+
+def test_tools_call_success():
+    """Tests that 'tools_call' returns our mocked result on valid params."""
+    inner = {
         "goal": "g",
         "objective": "o",
-        "expected_outcome": "e"
+        "expected_outcome": "e",
+        "session_id": "s1"
     }
-    payload.pop(missing_field)
-    r = client.post("/process", json=payload)
-    assert r.status_code == 422
-
-    body = r.json()
-    # The error detail must mention the missing field
-    locs = [err.get("loc", []) for err in body["detail"]]
-    assert any(missing_field in loc for loc in locs)
-
-
-def test_handle_process_success_creates_session_and_logs(monkeypatch, fake_log_path):
-    """
-    Happy-path: process_user_request returns normally → HTTP 200,
-    result includes session_id, and log is written.
-    """
-    # Stub out process_user_request
-    fake_output = {"foo": "bar"}
-    monkeypatch.setattr(
-        server,
-        "process_user_request",
-        lambda payload, session_id: fake_output.copy()
-    )
-
     payload = {
-        "goal": "anything",
-        "objective": "whatever",
-        "expected_outcome": "nothing"
+        "jsonrpc": "2.0",
+        "method": "tools_call",
+        "params": {
+            "method": "tools_call",
+            "params": inner
+        },
+        "id": 2
     }
-    r = client.post("/process", json=payload)
-    assert r.status_code == 200
 
-    body = r.json()
-    # Check output & session_id
-    assert body["foo"] == "bar"
-    assert "session_id" in body
-    sess = body["session_id"]
-    uuid.UUID(sess)
+    response = client.post("/", json=payload)
+    assert response.status_code == 200
 
-    # Verify log entry
-    log_file = fake_log_path / "mcp_requests.jsonl"
-    assert log_file.exists()
-    lines = log_file.read_text().splitlines()
-    assert len(lines) == 1
+    data = response.json()
+    assert data["jsonrpc"] == "2.0"
+    assert data["id"] == 2
+    assert "error" not in data
 
-    entry = json.loads(lines[0])
-    assert entry["session_id"] == sess
-    assert entry["input"] == payload
-    assert entry["output"]["foo"] == "bar"
-    assert "timestamp" in entry
-    assert "duration" in entry
-    uuid.UUID(entry["id"])
+    result = data["result"]
+    assert result["status"] == "success"
+    assert result["session_id"] == "s1"
+    # ensure our fake params made it through
+    assert result["input"] == inner
 
 
-def test_handle_process_preserves_client_session_id(monkeypatch):
-    """
-    If the client supplies session_id, the server echoes it back.
-    """
-    monkeypatch.setattr(
-        server,
-        "process_user_request",
-        lambda payload, session_id: {"ok": True}
-    )
-    custom_session = "123e4567-e89b-12d3-a456-426614174000"
-
+def test_tools_call_invalid_params():
+    """Tests that missing 'params' subkey yields a -32602 Invalid Params error."""
     payload = {
-        "session_id": custom_session,
-        "goal": "x",
-        "objective": "y",
-        "expected_outcome": "z"
+        "jsonrpc": "2.0",
+        "method": "tools_call",
+        "params": {},  # missing both 'method' and 'params'
+        "id": 3
     }
-    r = client.post("/process", json=payload)
-    assert r.status_code == 200
-    assert r.json()["session_id"] == custom_session
 
+    response = client.post("/", json=payload)
+    assert response.status_code == 200
 
-def test_handle_process_400_on_value_error(monkeypatch, fake_log_path):
-    """
-    If process_user_request raises ValueError, return HTTP 400.
-    Background logging is scheduled but not executed in TestClient, so no log file.
-    """
-    def fail_val(payload, session_id):
-        raise ValueError("invalid dates")
-    monkeypatch.setattr(server, "process_user_request", fail_val)
+    data = response.json()
+    assert data["jsonrpc"] == "2.0"
+    assert data["id"] == 3
 
-    payload = {
-        "goal": "bad dates",
-        "objective": "o",
-        "expected_outcome": "e"
-    }
-    r = client.post("/process", json=payload)
-    assert r.status_code == 400
-
-    body = r.json()
-    assert "invalid dates" in body["detail"]
-
-    # No log file will exist in this test for a 400
-    log_file = fake_log_path / "mcp_requests.jsonl"
-    assert not log_file.exists()
-
-
-def test_handle_process_500_on_exception(monkeypatch, fake_log_path):
-    """
-    If process_user_request raises an unexpected exception, return HTTP 500 and do NOT log.
-    """
-    def crash(payload, session_id):
-        raise RuntimeError("boom!")
-    monkeypatch.setattr(server, "process_user_request", crash)
-
-    payload = {
-        "goal": "crash",
-        "objective": "",
-        "expected_outcome": ""
-    }
-    r = client.post("/process", json=payload)
-    assert r.status_code == 500
-
-    detail = r.json()["detail"]
-    assert "boom!" in detail["error"]
-    assert "request_id" in detail
-
-    # No log should be created on exception
-    log_file = fake_log_path / "mcp_requests.jsonl"
-    assert not log_file.exists()
+    error = data.get("error")
+    assert isinstance(error, dict)
+    assert error["code"] == -32602
+    assert isinstance(error["message"], str)

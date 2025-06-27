@@ -1,1 +1,23 @@
-.env
+# macOS
+.DS_Store
+._*
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.venv/
+
+# Logs & cache
+logs/
+data/
+sample_responses/
+
+# Node
+node_modules/
+
+# One-offs
+cleanup.py
+view_logs.py
+trace_run_tool*.py

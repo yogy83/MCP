@@ -1,62 +1,74 @@
-# tests/test_utils.py
-
-import os
 import sys
+import os
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import json
 import pytest
-from pathlib import Path
+from unittest import mock
+from core.utils import load_tool_contracts_from_folder, load_json_file
 
-# Ensure project root is on sys.path so `import core.utils` works
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from core.utils import load_tool_contracts_from_folder
+def test_load_json_file_success(tmp_path):
+    # Create a valid JSON file
+    file = tmp_path / "valid.json"
+    file.write_text('{"key": "value"}', encoding="utf-8")
+    
+    data = load_json_file(str(file))  # <-- only one argument now
+    assert data == {"key": "value"}
 
-def write_file(folder: Path, name: str, content: str):
-    path = folder / name
-    path.write_text(content)
-    return path
+def test_load_json_file_file_not_found():
+    data = load_json_file("non_existent_file.json")  # <-- only one argument now
+    assert data is None
 
-def test_load_valid_contracts(tmp_path, capsys):
-    # Create two valid JSON files
-    good1 = {"tool_name": "tool1", "foo": 1}
-    good2 = {"foo": 2}  # missing tool_name → key derived from filename
+def test_load_json_file_malformed_json(tmp_path):
+    file = tmp_path / "bad.json"
+    file.write_text('{"key": "value"', encoding="utf-8")  # missing closing }
 
-    folder = tmp_path / "contracts"
-    folder.mkdir()
+    data = load_json_file(str(file))  # <-- only one argument now
+    assert data is None
 
-    write_file(folder, "a.json", json.dumps(good1))
-    write_file(folder, "b.json", json.dumps(good2))
-    # Also add a non-JSON file
-    write_file(folder, "ignore.txt", "should be ignored")
+@mock.patch("os.listdir")
+@mock.patch("builtins.open")
+def test_load_tool_contracts_from_folder_loads_contracts(mock_open, mock_listdir, tmp_path):
+    mock_listdir.return_value = ["contract1.json"]
+    
+    contract_content = {
+        "tool_name": "tool1",
+        "json_schema": {
+            "request": "request_schema.json",
+            "response": "response_schema.json"
+        }
+    }
+    request_schema = {"type": "object"}
+    response_schema = {"type": "object"}
 
-    result = load_tool_contracts_from_folder(str(folder))
+    schema_dir = tmp_path / "json_schemas"
+    schema_dir.mkdir()
+    (schema_dir / "request_schema.json").write_text(json.dumps(request_schema))
+    (schema_dir / "response_schema.json").write_text(json.dumps(response_schema))
 
-    # Expect two entries
-    assert set(result.keys()) == {"tool1", "b"}
-    assert result["tool1"]["foo"] == 1
-    assert result["b"]["foo"] == 2
+    def open_side_effect(filepath, *args, **kwargs):
+        if filepath.endswith("contract1.json"):
+            return mock.mock_open(read_data=json.dumps(contract_content)).return_value
+        elif filepath.endswith("request_schema.json"):
+            return mock.mock_open(read_data=json.dumps(request_schema)).return_value
+        elif filepath.endswith("response_schema.json"):
+            return mock.mock_open(read_data=json.dumps(response_schema)).return_value
+        else:
+            raise FileNotFoundError
 
-    # No error printed
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == ""
+    mock_open.side_effect = open_side_effect
 
-def test_load_malformed_json_reports_error(tmp_path, capsys):
-    folder = tmp_path / "contracts"
-    folder.mkdir()
+    original_join = os.path.join  # Save the original os.path.join function
 
-    # Good file
-    write_file(folder, "good.json", json.dumps({"tool_name": "good"}))
-    # Malformed JSON
-    write_file(folder, "bad.json", "{ not valid json }")
+    with mock.patch("os.path.join", side_effect=lambda *args: original_join(tmp_path, *args[-2:])):
+        contracts = load_tool_contracts_from_folder(str(tmp_path))
+    
+    assert "tool1" in contracts
+    assert contracts["tool1"]["request_schema"] == request_schema
+    assert contracts["tool1"]["response_schema"] == response_schema
 
-    result = load_tool_contracts_from_folder(str(folder))
-
-    # Only the good one loaded
-    assert set(result.keys()) == {"good"}
-
-    # Should have printed an error mentioning bad.json
-    captured = capsys.readouterr()
-    assert "Failed to load bad.json" in captured.out
-    # JSON error messages vary, but always include the word "Expecting"
-    assert "Expecting" in captured.out
+def test_load_tool_contracts_folder_not_exist():
+    contracts = load_tool_contracts_from_folder("/non/existent/folder")
+    assert contracts == {}
